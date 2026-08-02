@@ -409,3 +409,259 @@ alter table audit_log enable row level security;
 create policy "Owner voit le journal d'audit de son organisation"
   on audit_log for select
   using (is_org_owner(org_id));
+
+-- ============================================================
+-- V3 : verrouillage de la création d'organisation, super_admin,
+-- désactivation de client, durcissement de l'authentification
+-- ============================================================
+--
+-- Un seul rôle peut désormais créer une organisation : super_admin (le
+-- vendeur). Le formulaire d'inscription public a été supprimé côté client ;
+-- la policy INSERT sur organizations empêche aussi toute tentative directe
+-- via l'API. La création réelle passe par admin_create_client() ci-dessous,
+-- qui crée l'auth.users du patron directement en SQL (avec mot de passe
+-- temporaire) car cette opération nécessite des privilèges que le rôle
+-- "authenticated" n'a jamais, quel que soit le compte.
+
+alter table organizations add column if not exists active boolean not null default true;
+
+create table if not exists super_admins (
+  user_id uuid primary key references auth.users on delete cascade,
+  phone text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create or replace function is_super_admin() returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from super_admins where user_id = auth.uid())
+$$;
+grant execute on function is_super_admin() to authenticated;
+
+-- is_org_owner / is_own_employee exigent désormais que l'organisation soit
+-- active : même si banned_until (voir plus bas) n'était pas posé sur un
+-- compte pour une raison quelconque, l'accès aux données resterait bloqué.
+create or replace function is_org_owner(p_org_id uuid) returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from organizations where id = p_org_id and owner_user_id = auth.uid() and active = true)
+$$;
+
+create or replace function is_own_employee(p_employee_id uuid) returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from employees e
+    join organizations o on o.id = e.org_id
+    where e.id = p_employee_id and e.user_id = auth.uid() and o.active = true
+  )
+$$;
+
+-- Utilisée côté employé pour afficher un message clair si son organisation
+-- est désactivée, sans lui exposer le reste de la ligne organizations
+-- (owner_phone, invite_token, etc.).
+create or replace function get_my_org_status() returns jsonb
+language sql stable security definer set search_path = public
+as $$
+  select jsonb_build_object('name', o.name, 'active', o.active)
+  from employees e join organizations o on o.id = e.org_id
+  where e.user_id = auth.uid()
+  limit 1
+$$;
+grant execute on function get_my_org_status() to authenticated;
+
+-- ------------------------------------------------------------
+-- RLS : organizations — remplace la policy d'auto-inscription.
+-- ------------------------------------------------------------
+
+drop policy if exists "Création d'organisation à l'inscription" on organizations;
+create policy "Seul un super admin crée une organisation"
+  on organizations for insert
+  with check (is_super_admin());
+
+create policy "Super admin voit toutes les organisations"
+  on organizations for select
+  using (is_super_admin());
+
+create policy "Super admin active ou désactive un client"
+  on organizations for update
+  using (is_super_admin())
+  with check (is_super_admin());
+
+-- ------------------------------------------------------------
+-- RLS : super_admins
+-- ------------------------------------------------------------
+
+alter table super_admins enable row level security;
+
+create policy "Un utilisateur sait s'il est super admin"
+  on super_admins for select
+  using (user_id = auth.uid());
+
+-- ------------------------------------------------------------
+-- Création de compte manager par le super admin (avec mot de passe
+-- temporaire) et activation/désactivation d'un client.
+--
+-- banned_until (colonne native auth.users) est la protection principale :
+-- GoTrue refuse l'authentification d'un compte banni au niveau du serveur
+-- d'auth lui-même, pas seulement via nos policies RLS. On la pose sur le
+-- patron ET tous ses employés à la désactivation.
+-- ------------------------------------------------------------
+
+create or replace function admin_create_client(
+  p_org_name text, p_owner_name text, p_owner_phone text, p_seats integer, p_price numeric
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions
+as $$
+declare
+  v_phone text := regexp_replace(p_owner_phone, '\D', '', 'g');
+  v_email text := v_phone || '@phone.pointage-pro.internal';
+  v_user_id uuid;
+  v_org_id uuid;
+  v_password text;
+begin
+  if not is_super_admin() then
+    raise exception 'Réservé au super administrateur';
+  end if;
+
+  if exists (select 1 from auth.users where email = v_email) then
+    raise exception 'Ce numéro de téléphone est déjà utilisé par un autre compte';
+  end if;
+
+  -- Mot de passe temporaire lisible (évite les caractères ambigus), avec au
+  -- moins une majuscule, une minuscule et un chiffre garantis par
+  -- construction, pour rester cohérent avec la politique de robustesse.
+  v_password := (
+    select
+      substr('ABCDEFGHJKLMNPQRSTUVWXYZ', ceil(random() * 24)::int, 1) ||
+      substr('abcdefghjkmnpqrstuvwxyz', ceil(random() * 23)::int, 1) ||
+      substr('23456789', ceil(random() * 8)::int, 1) ||
+      string_agg(substr('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789', ceil(random() * 57)::int, 1), '')
+    from generate_series(1, 7)
+  );
+
+  v_user_id := gen_random_uuid();
+
+  insert into auth.users (
+    instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+    raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_token,
+    recovery_token, email_change_token_new, email_change, is_sso_user, is_anonymous
+  ) values (
+    '00000000-0000-0000-0000-000000000000', v_user_id, 'authenticated', 'authenticated',
+    v_email, extensions.crypt(v_password, extensions.gen_salt('bf')), now(),
+    '{"provider":"email","providers":["email"]}'::jsonb, '{}'::jsonb, now(), now(), '',
+    '', '', '', false, false
+  );
+
+  -- email est une colonne générée (à partir de identity_data) : on ne
+  -- l'insère pas directement.
+  insert into auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)
+  values (
+    v_user_id::text, v_user_id,
+    jsonb_build_object('sub', v_user_id::text, 'email', v_email, 'email_verified', true, 'phone_verified', false),
+    'email', now(), now()
+  );
+
+  insert into organizations (name, owner_name, owner_phone, owner_user_id, active)
+  values (p_org_name, p_owner_name, v_phone, v_user_id, true)
+  returning id into v_org_id;
+
+  insert into packs (org_id, seats, price, purchased_at)
+  values (v_org_id, p_seats, p_price, now());
+
+  insert into audit_log (org_id, actor_user_id, action, target_table, target_id, details)
+  values (
+    v_org_id, auth.uid(), 'client_created', 'organizations', v_org_id,
+    jsonb_build_object('org_name', p_org_name, 'owner_phone', v_phone, 'seats', p_seats)
+  );
+
+  return jsonb_build_object('org_id', v_org_id, 'owner_phone', v_phone, 'temp_password', v_password);
+end;
+$$;
+grant execute on function admin_create_client(text, text, text, integer, numeric) to authenticated;
+
+create or replace function admin_set_org_active(p_org_id uuid, p_active boolean) returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_ban timestamptz;
+begin
+  if not is_super_admin() then
+    raise exception 'Réservé au super administrateur';
+  end if;
+
+  v_ban := case when p_active then null else 'infinity'::timestamptz end;
+
+  update organizations set active = p_active where id = p_org_id;
+
+  update auth.users set banned_until = v_ban
+  where id = (select owner_user_id from organizations where id = p_org_id);
+
+  update auth.users set banned_until = v_ban
+  where id in (select user_id from employees where org_id = p_org_id and user_id is not null);
+
+  insert into audit_log (org_id, actor_user_id, action, target_table, target_id, details)
+  values (p_org_id, auth.uid(), case when p_active then 'client_reactivated' else 'client_deactivated' end, 'organizations', p_org_id, '{}'::jsonb);
+end;
+$$;
+grant execute on function admin_set_org_active(uuid, boolean) to authenticated;
+
+-- ------------------------------------------------------------
+-- Verrouillage anti-bruteforce.
+--
+-- La protection robuste pour ça est le hook Auth "Password Verification
+-- Attempt" : GoTrue l'appelle pour CHAQUE tentative de connexion, quel que
+-- soit le client qui appelle l'API, donc impossible à contourner en
+-- appelant directement l'endpoint d'auth. CE HOOK N'EST PAS DISPONIBLE sur
+-- le plan Supabase gratuit de ce projet (rejeté par l'API Management :
+-- "HOOK_PASSWORD_VERIFICATION_ATTEMPT cannot be configured for this
+-- organization") — il nécessite un passage au plan Pro ou supérieur.
+--
+-- En attendant, ce verrou est appliqué au niveau applicatif : l'écran de
+-- connexion appelle check_login_lockout() avant de tenter l'authentification
+-- et record_login_result() après. LIMITE CONNUE, à corriger en activant le
+-- hook une fois le plan payant actif : un script qui appellerait
+-- directement l'API Supabase Auth avec la clé publique (en contournant
+-- notre écran de connexion) contournerait ce verrou.
+-- ------------------------------------------------------------
+
+create table if not exists login_lockouts (
+  identifier text primary key,
+  failed_attempts integer not null default 0,
+  locked_until timestamptz
+);
+
+create or replace function check_login_lockout(p_identifier text) returns jsonb
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_locked_until timestamptz;
+begin
+  select locked_until into v_locked_until from login_lockouts where identifier = p_identifier;
+  if v_locked_until is not null and v_locked_until > now() then
+    return jsonb_build_object('locked', true, 'retry_after', v_locked_until);
+  end if;
+  return jsonb_build_object('locked', false);
+end;
+$$;
+grant execute on function check_login_lockout(text) to anon, authenticated;
+
+create or replace function record_login_result(p_identifier text, p_success boolean) returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if p_success then
+    delete from login_lockouts where identifier = p_identifier;
+  else
+    insert into login_lockouts (identifier, failed_attempts, locked_until)
+    values (p_identifier, 1, null)
+    on conflict (identifier) do update set
+      failed_attempts = login_lockouts.failed_attempts + 1,
+      locked_until = case
+        when login_lockouts.failed_attempts + 1 >= 5 then now() + interval '15 minutes'
+        else login_lockouts.locked_until
+      end;
+  end if;
+end;
+$$;
+grant execute on function record_login_result(text, boolean) to anon, authenticated;

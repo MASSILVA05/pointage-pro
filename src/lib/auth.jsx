@@ -5,12 +5,13 @@ import { supabase } from './supabase'
 const AuthContext = createContext(null)
 
 async function loadRole(session) {
-  if (!session) return { org: null, employee: null }
-  const [{ data: org }, { data: employee }] = await Promise.all([
+  if (!session) return { org: null, employee: null, isSuperAdmin: false }
+  const [{ data: org }, { data: employee }, { data: superAdmin }] = await Promise.all([
     supabase.from('organizations').select('*').eq('owner_user_id', session.user.id).maybeSingle(),
     supabase.from('employees').select('*').eq('user_id', session.user.id).maybeSingle(),
+    supabase.from('super_admins').select('user_id').eq('user_id', session.user.id).maybeSingle(),
   ])
-  return { org: org ?? null, employee: employee ?? null }
+  return { org: org ?? null, employee: employee ?? null, isSuperAdmin: !!superAdmin }
 }
 
 export function AuthProvider({ children }) {
@@ -18,6 +19,7 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [org, setOrg] = useState(null)
   const [employee, setEmployee] = useState(null)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -29,6 +31,7 @@ export function AuthProvider({ children }) {
       setSession(data.session)
       setOrg(role.org)
       setEmployee(role.employee)
+      setIsSuperAdmin(role.isSuperAdmin)
       setLoading(false)
     })
 
@@ -38,6 +41,7 @@ export function AuthProvider({ children }) {
       setSession(newSession)
       setOrg(role.org)
       setEmployee(role.employee)
+      setIsSuperAdmin(role.isSuperAdmin)
       setLoading(false)
     })
 
@@ -59,10 +63,11 @@ export function AuthProvider({ children }) {
     const role = await loadRole(data.session)
     setOrg(role.org)
     setEmployee(role.employee)
+    setIsSuperAdmin(role.isSuperAdmin)
   }
 
   return (
-    <AuthContext.Provider value={{ loading, session, org, employee, signOut, refreshRole }}>
+    <AuthContext.Provider value={{ loading, session, org, employee, isSuperAdmin, signOut, refreshRole }}>
       {children}
     </AuthContext.Provider>
   )
@@ -85,6 +90,14 @@ export function RequireEmployee({ children }) {
   if (loading) return <FullPageLoader />
   if (!session) return <Navigate to="/login" replace />
   if (!employee) return <Navigate to="/login" replace />
+  return children
+}
+
+export function RequireSuperAdmin({ children }) {
+  const { loading, session, isSuperAdmin } = useAuth()
+  if (loading) return <FullPageLoader />
+  if (!session) return <Navigate to="/login" replace />
+  if (!isSuperAdmin) return <Navigate to="/login" replace />
   return children
 }
 

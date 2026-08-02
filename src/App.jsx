@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { AuthProvider, RequireEmployee, RequireOwner } from './lib/auth'
+import { AuthProvider, RequireEmployee, RequireOwner, RequireSuperAdmin } from './lib/auth'
 import Login from './pages/Login'
-import Signup from './pages/Signup'
 import Invite from './pages/Invite'
 import EmployeePointer from './pages/EmployeePointer'
 import DashboardLayout from './layouts/DashboardLayout'
@@ -10,6 +9,7 @@ import Employees from './pages/dashboard/Employees'
 import Pointages from './pages/dashboard/Pointages'
 import Leaves from './pages/dashboard/Leaves'
 import Reports from './pages/dashboard/Reports'
+import Admin from './pages/Admin'
 
 export default function App() {
   return (
@@ -17,8 +17,16 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
         <Route path="/invite/:token" element={<Invite />} />
+
+        <Route
+          path="/admin"
+          element={
+            <RequireSuperAdmin>
+              <Admin />
+            </RequireSuperAdmin>
+          }
+        />
 
         <Route
           path="/pointer"

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { normalizePhone, phoneToEmail } from '../lib/phone'
+import { passwordError } from '../lib/password'
 import { BUTTON_PRIMARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../lib/ui'
 
 export default function Invite() {
@@ -63,8 +64,9 @@ export default function Invite() {
   async function handlePasswordSubmit(e) {
     e.preventDefault()
     setError('')
-    if (password.length < 6) {
-      setError('Le mot de passe doit contenir au moins 6 caractères')
+    const pwError = passwordError(password)
+    if (pwError) {
+      setError(pwError)
       return
     }
 
@@ -168,6 +170,9 @@ export default function Invite() {
                   onChange={(e) => setPassword(e.target.value)}
                   className={INPUT_CLASS}
                 />
+                <p className="mt-1.5 text-xs text-text-faint">
+                  Au moins 8 caractères, avec une majuscule, une minuscule et un chiffre.
+                </p>
               </div>
               {error && <p className="text-sm text-danger">{error}</p>}
               <button type="submit" disabled={loading} className={BUTTON_PRIMARY_CLASS}>

@@ -12,6 +12,26 @@ const NAV_ITEMS = [
 export default function DashboardLayout() {
   const { org, signOut } = useAuth()
 
+  if (!org.active) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-bg-subtle px-4">
+        <div className="w-full max-w-md rounded-lg border border-danger bg-white p-6 text-center">
+          <h1 className="mb-2 text-lg font-semibold text-text">Compte désactivé</h1>
+          <p className="mb-4 text-sm text-text-muted">
+            L'accès de "{org.name}" a été désactivé. Contactez votre fournisseur pour plus d'informations.
+          </p>
+          <button
+            type="button"
+            onClick={signOut}
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-text hover:bg-bg-hover"
+          >
+            Déconnexion
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-svh bg-bg-subtle">
       <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-white">

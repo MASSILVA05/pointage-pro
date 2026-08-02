@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { normalizePhone, phoneToEmail } from '../lib/phone'
 import { BUTTON_PRIMARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../lib/ui'
@@ -16,19 +16,46 @@ export default function Login() {
     setError('')
     setLoading(true)
 
+    const normalizedPhone = normalizePhone(phone)
+    const email = phoneToEmail(normalizedPhone)
+
     try {
-      const email = phoneToEmail(normalizePhone(phone))
+      const { data: lockStatus } = await supabase.rpc('check_login_lockout', { p_identifier: normalizedPhone })
+      if (lockStatus?.locked) {
+        setError('Trop de tentatives échouées. Réessayez dans quelques minutes.')
+        return
+      }
+
       const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+
+      await supabase.rpc('record_login_result', { p_identifier: normalizedPhone, p_success: !signInError })
+
       if (signInError) throw signInError
 
       const userId = data.session.user.id
+
+      const { data: superAdmin } = await supabase
+        .from('super_admins')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle()
+      if (superAdmin) {
+        navigate('/admin')
+        return
+      }
+
       const { data: org } = await supabase
         .from('organizations')
-        .select('id')
+        .select('id, active')
         .eq('owner_user_id', userId)
         .maybeSingle()
 
       if (org) {
+        if (!org.active) {
+          setError('Ce compte a été désactivé. Contactez votre fournisseur.')
+          await supabase.auth.signOut()
+          return
+        }
         navigate('/dashboard')
         return
       }
@@ -96,13 +123,6 @@ export default function Login() {
             {loading ? 'Connexion…' : 'Se connecter'}
           </button>
         </form>
-
-        <p className="mt-5 text-center text-sm text-text-muted">
-          Nouvelle entreprise ?{' '}
-          <Link to="/signup" className="font-medium text-accent hover:underline">
-            Créer un compte
-          </Link>
-        </p>
       </div>
     </div>
   )

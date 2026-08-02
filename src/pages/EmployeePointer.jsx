@@ -17,18 +17,23 @@ export default function EmployeePointer() {
   const [recent, setRecent] = useState([])
   const [pendingType, setPendingType] = useState(null)
   const [confirmDoubleEntry, setConfirmDoubleEntry] = useState(false)
+  const [orgStatus, setOrgStatus] = useState(null)
 
   useEffect(() => {
     let active = true
     async function loadRecent() {
-      const { data } = await supabase
-        .from('pointages')
-        .select('type, time')
-        .eq('employee_id', employee.id)
-        .order('time', { ascending: false })
-        .limit(20)
+      const [{ data }, { data: status }] = await Promise.all([
+        supabase
+          .from('pointages')
+          .select('type, time')
+          .eq('employee_id', employee.id)
+          .order('time', { ascending: false })
+          .limit(20),
+        supabase.rpc('get_my_org_status'),
+      ])
       if (!active) return
       setRecent(data ?? [])
+      setOrgStatus(status ?? null)
     }
     loadRecent()
     return () => {
@@ -105,6 +110,26 @@ export default function EmployeePointer() {
   }
 
   const busy = status === 'locating' || status === 'uploading'
+
+  if (orgStatus && orgStatus.active === false) {
+    return (
+      <div className="flex min-h-svh items-center justify-center bg-bg-subtle px-4">
+        <div className="w-full max-w-sm rounded-lg border border-danger bg-white p-6 text-center">
+          <h1 className="mb-2 text-lg font-semibold text-text">Compte désactivé</h1>
+          <p className="mb-4 text-sm text-text-muted">
+            L'accès de "{orgStatus.name}" a été désactivé. Contactez votre employeur.
+          </p>
+          <button
+            type="button"
+            onClick={signOut}
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-text hover:bg-bg-hover"
+          >
+            Déconnexion
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-svh flex-col items-center bg-bg-subtle px-4 py-8">
