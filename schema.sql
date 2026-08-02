@@ -665,3 +665,43 @@ begin
 end;
 $$;
 grant execute on function record_login_result(text, boolean) to anon, authenticated;
+
+-- ============================================================
+-- V4 : champs paye algérienne (CNAS) + import Excel en masse
+-- ============================================================
+--
+-- matricule, situation familiale, adresse, lieu de naissance, poste et
+-- informations de contrat sont des champs d'identité/RH classiques : ils
+-- restent sur employees, visibles par l'employé lui-même (comme birthdate
+-- déjà) et par le manager.
+--
+-- cnas_fund, bank_account, bank_name, bank_branch et loan_balance sont des
+-- données bancaires/financières : elles vont sur employee_payroll, la
+-- même table déjà utilisée pour social_security_number et le salaire, qui
+-- n'a AUCUNE policy RLS accordant l'accès à l'employé — même règle de
+-- sécurité, appliquée par construction plutôt que par une nouvelle policy.
+
+alter table employees
+  add column if not exists matricule text,
+  add column if not exists family_status text check (family_status in ('Marié', 'Célibataire', 'Divorcé', 'Veuf')),
+  add column if not exists address text,
+  add column if not exists birth_place text,
+  add column if not exists job_title text,
+  add column if not exists contract_type text check (contract_type in ('Permanent', 'Contractuel', 'CDD', 'CDI')),
+  add column if not exists contract_start_date date,
+  add column if not exists contract_end_date date,
+  add column if not exists hire_date date,
+  add column if not exists termination_date date,
+  add column if not exists termination_reason text;
+
+-- Unique par organisation (pas globalement) : deux clients différents
+-- peuvent tout à fait utiliser le même schéma de matricules. NULL autorisé
+-- et non contraint par l'unicité (comportement standard Postgres).
+create unique index if not exists employees_org_matricule_idx on employees (org_id, matricule) where matricule is not null;
+
+alter table employee_payroll
+  add column if not exists cnas_fund text,
+  add column if not exists bank_account text,
+  add column if not exists bank_name text,
+  add column if not exists bank_branch text,
+  add column if not exists loan_balance numeric(12, 2);
