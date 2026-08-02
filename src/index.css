@@ -54,3 +54,20 @@
     font-family: var(--font-sans);
   }
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #print-area, #print-area * {
+    visibility: visible;
+  }
+  #print-area {
+    position: absolute;
+    inset: 0;
+    padding: 24px;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

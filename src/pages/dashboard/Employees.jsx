@@ -18,9 +18,18 @@ function StatusBadge({ status }) {
   )
 }
 
+function payLabel(payroll) {
+  if (!payroll) return '—'
+  if (payroll.pay_type === 'hourly') {
+    return payroll.hourly_rate != null ? `${payroll.hourly_rate} / h` : 'Horaire'
+  }
+  return payroll.monthly_salary != null ? `${payroll.monthly_salary} / mois` : 'Mensuel'
+}
+
 export default function Employees() {
   const { org } = useAuth()
   const [employees, setEmployees] = useState([])
+  const [payrolls, setPayrolls] = useState([])
   const [seatsTotal, setSeatsTotal] = useState(0)
   const [loading, setLoading] = useState(true)
 
@@ -28,17 +37,23 @@ export default function Employees() {
   const [lastName, setLastName] = useState('')
   const [birthdate, setBirthdate] = useState('')
   const [phone, setPhone] = useState('')
+  const [ssn, setSsn] = useState('')
+  const [payType, setPayType] = useState('hourly')
+  const [hourlyRate, setHourlyRate] = useState('')
+  const [monthlySalary, setMonthlySalary] = useState('')
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
 
   async function load() {
     setLoading(true)
-    const [{ data: emp }, { data: packs }] = await Promise.all([
+    const [{ data: emp }, { data: packs }, { data: pay }] = await Promise.all([
       supabase.from('employees').select('*').eq('org_id', org.id).order('created_at', { ascending: false }),
       supabase.from('packs').select('seats').eq('org_id', org.id),
+      supabase.from('employee_payroll').select('*').eq('org_id', org.id),
     ])
     setEmployees(emp ?? [])
     setSeatsTotal((packs ?? []).reduce((sum, p) => sum + p.seats, 0))
+    setPayrolls(pay ?? [])
     setLoading(false)
   }
 
@@ -66,20 +81,38 @@ export default function Employees() {
 
     setAdding(true)
     try {
-      const { error } = await supabase.from('employees').insert({
-        org_id: org.id,
-        first_name: firstName,
-        last_name: lastName,
-        birthdate: birthdate || null,
-        phone: normalizedPhone,
-        status: 'pending',
-      })
+      const { data: newEmployee, error } = await supabase
+        .from('employees')
+        .insert({
+          org_id: org.id,
+          first_name: firstName,
+          last_name: lastName,
+          birthdate: birthdate || null,
+          phone: normalizedPhone,
+          status: 'pending',
+        })
+        .select()
+        .single()
       if (error) throw error
+
+      const { error: payrollError } = await supabase.from('employee_payroll').insert({
+        employee_id: newEmployee.id,
+        org_id: org.id,
+        social_security_number: ssn || null,
+        pay_type: payType,
+        hourly_rate: payType === 'hourly' && hourlyRate ? parseFloat(hourlyRate) : null,
+        monthly_salary: payType === 'monthly' && monthlySalary ? parseFloat(monthlySalary) : null,
+      })
+      if (payrollError) throw payrollError
 
       setFirstName('')
       setLastName('')
       setBirthdate('')
       setPhone('')
+      setSsn('')
+      setPayType('hourly')
+      setHourlyRate('')
+      setMonthlySalary('')
       await load()
     } catch (err) {
       if (err.message?.includes('duplicate') || err.code === '23505') {
@@ -157,6 +190,64 @@ export default function Employees() {
             />
           </div>
 
+          <div className="sm:col-span-2 border-t border-border pt-3">
+            <p className="mb-3 text-xs font-medium tracking-wide text-text-faint uppercase">
+              Informations confidentielles (visibles par vous uniquement)
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="ssn" className={LABEL_CLASS}>
+              Numéro de sécurité sociale
+            </label>
+            <input id="ssn" value={ssn} onChange={(e) => setSsn(e.target.value)} className={INPUT_CLASS} />
+          </div>
+          <div>
+            <label htmlFor="payType" className={LABEL_CLASS}>
+              Type de paye
+            </label>
+            <select
+              id="payType"
+              value={payType}
+              onChange={(e) => setPayType(e.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="hourly">Horaire</option>
+              <option value="monthly">Mensuelle</option>
+            </select>
+          </div>
+          {payType === 'hourly' ? (
+            <div>
+              <label htmlFor="hourlyRate" className={LABEL_CLASS}>
+                Taux horaire
+              </label>
+              <input
+                id="hourlyRate"
+                type="number"
+                min="0"
+                step="0.01"
+                value={hourlyRate}
+                onChange={(e) => setHourlyRate(e.target.value)}
+                className={INPUT_CLASS}
+              />
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="monthlySalary" className={LABEL_CLASS}>
+                Salaire mensuel
+              </label>
+              <input
+                id="monthlySalary"
+                type="number"
+                min="0"
+                step="0.01"
+                value={monthlySalary}
+                onChange={(e) => setMonthlySalary(e.target.value)}
+                className={INPUT_CLASS}
+              />
+            </div>
+          )}
+
           {addError && <p className="text-sm text-danger sm:col-span-2">{addError}</p>}
 
           <div className="sm:col-span-2">
@@ -179,6 +270,7 @@ export default function Employees() {
                 <th className="px-4 py-3 font-medium">Nom</th>
                 <th className="px-4 py-3 font-medium">Téléphone</th>
                 <th className="px-4 py-3 font-medium">Naissance</th>
+                <th className="px-4 py-3 font-medium">Paye</th>
                 <th className="px-4 py-3 font-medium">Statut</th>
                 <th className="px-4 py-3 font-medium">Ajouté le</th>
               </tr>
@@ -192,6 +284,9 @@ export default function Employees() {
                   <td className="px-4 py-3 text-text-muted">{emp.phone}</td>
                   <td className="px-4 py-3 text-text-muted">
                     {emp.birthdate ? formatIsoDateOnly(emp.birthdate) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-text-muted">
+                    {payLabel(payrolls.find((p) => p.employee_id === emp.id))}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={emp.status} />

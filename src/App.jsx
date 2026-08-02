@@ -8,6 +8,8 @@ import DashboardLayout from './layouts/DashboardLayout'
 import Overview from './pages/dashboard/Overview'
 import Employees from './pages/dashboard/Employees'
 import Pointages from './pages/dashboard/Pointages'
+import Leaves from './pages/dashboard/Leaves'
+import Reports from './pages/dashboard/Reports'
 
 export default function App() {
   return (
@@ -38,6 +40,8 @@ export default function App() {
           <Route index element={<Overview />} />
           <Route path="employees" element={<Employees />} />
           <Route path="pointages" element={<Pointages />} />
+          <Route path="leaves" element={<Leaves />} />
+          <Route path="reports" element={<Reports />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/login" replace />} />

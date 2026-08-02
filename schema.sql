@@ -207,3 +207,205 @@ create policy "Lecture publique des photos de pointage"
 create policy "Upload de photos par les utilisateurs connectés"
   on storage.objects for insert
   with check (bucket_id = 'pointage-photos' and auth.role() = 'authenticated');
+
+-- ============================================================
+-- V2 : RH complète (heures, congés, paye) + sécurité renforcée
+-- ============================================================
+--
+-- Décision de conception importante : le numéro de sécurité sociale et les
+-- informations de paye (pay_type, hourly_rate, monthly_salary) NE SONT PAS
+-- ajoutés à la table employees. RLS Postgres filtre des LIGNES, pas des
+-- colonnes : il n'existe aucun moyen d'autoriser un employé à lire sa propre
+-- ligne "employees" tout en lui masquant certaines colonnes via une policy,
+-- surtout que owner et employé partagent le même rôle Postgres "authenticated"
+-- (la distinction est purement applicative, pas au niveau rôle SQL). La seule
+-- garantie robuste (pas juste un masquage côté interface) est de séparer ces
+-- données dans une table dédiée dont AUCUNE policy n'autorise l'employé,
+-- quelles que soient les colonnes demandées dans sa requête.
+
+create table if not exists employee_payroll (
+  employee_id uuid primary key references employees on delete cascade,
+  org_id uuid not null references organizations on delete cascade,
+  social_security_number text,
+  pay_type text not null default 'hourly' check (pay_type in ('hourly', 'monthly')),
+  hourly_rate numeric(10, 2),
+  monthly_salary numeric(10, 2),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists employee_payroll_org_id_idx on employee_payroll (org_id);
+
+create table if not exists leaves (
+  id uuid primary key default gen_random_uuid(),
+  employee_id uuid not null references employees on delete cascade,
+  org_id uuid not null references organizations on delete cascade,
+  type text not null check (type in ('paid', 'sick', 'unpaid')),
+  start_date date not null,
+  end_date date not null check (end_date >= start_date),
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists leaves_org_id_idx on leaves (org_id);
+create index if not exists leaves_employee_id_idx on leaves (employee_id);
+
+create table if not exists audit_log (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organizations on delete cascade,
+  actor_user_id uuid,
+  action text not null,
+  target_table text not null,
+  target_id uuid,
+  details jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists audit_log_org_id_idx on audit_log (org_id, created_at desc);
+
+-- Choix explicite entrée/sortie (voir src/pages/EmployeePointer.jsx) : le
+-- calcul des heures travaillées pair les pointages 'entrée'/'sortie' d'un
+-- même jour, dans cet ordre, plutôt que de déduire le sens du pointage.
+alter table pointages add column if not exists type text not null default 'entrée'
+  check (type in ('entrée', 'sortie'));
+
+-- ------------------------------------------------------------
+-- Fonctions utilitaires supplémentaires
+-- ------------------------------------------------------------
+
+create or replace function is_org_owner(p_org_id uuid) returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from organizations where id = p_org_id and owner_user_id = auth.uid())
+$$;
+grant execute on function is_org_owner(uuid) to authenticated;
+
+create or replace function is_own_employee(p_employee_id uuid) returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from employees where id = p_employee_id and user_id = auth.uid())
+$$;
+grant execute on function is_own_employee(uuid) to authenticated;
+
+-- ------------------------------------------------------------
+-- Audit : enregistre qui a modifié quoi sur les données employé.
+-- Les triggers sont security definer pour pouvoir écrire dans audit_log
+-- (aucune policy n'autorise authenticated à y insérer directement).
+-- Le numéro de sécurité sociale n'est jamais recopié en clair dans le log.
+-- ------------------------------------------------------------
+
+create or replace function log_employee_created() returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  insert into audit_log (org_id, actor_user_id, action, target_table, target_id, details)
+  values (
+    new.org_id, auth.uid(), 'employee_created', 'employees', new.id,
+    jsonb_build_object('first_name', new.first_name, 'last_name', new.last_name, 'phone', new.phone)
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_log_employee_created on employees;
+create trigger trg_log_employee_created
+  after insert on employees
+  for each row execute function log_employee_created();
+
+create or replace function log_payroll_change() returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  insert into audit_log (org_id, actor_user_id, action, target_table, target_id, details)
+  values (
+    new.org_id, auth.uid(),
+    case when tg_op = 'INSERT' then 'payroll_created' else 'payroll_updated' end,
+    'employee_payroll', new.employee_id,
+    jsonb_build_object(
+      'pay_type', new.pay_type,
+      'hourly_rate', new.hourly_rate,
+      'monthly_salary', new.monthly_salary,
+      'ssn_set', new.social_security_number is not null
+    )
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_log_payroll_change on employee_payroll;
+create trigger trg_log_payroll_change
+  after insert or update on employee_payroll
+  for each row execute function log_payroll_change();
+
+create or replace function log_leave_status_change() returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if new.status is distinct from old.status then
+    insert into audit_log (org_id, actor_user_id, action, target_table, target_id, details)
+    values (
+      new.org_id, auth.uid(), 'leave_status_changed', 'leaves', new.id,
+      jsonb_build_object('type', new.type, 'old_status', old.status, 'new_status', new.status)
+    );
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_log_leave_status_change on leaves;
+create trigger trg_log_leave_status_change
+  after update on leaves
+  for each row execute function log_leave_status_change();
+
+-- ------------------------------------------------------------
+-- RLS : employee_payroll — accès manager uniquement, jamais l'employé,
+-- quelles que soient les colonnes demandées.
+-- ------------------------------------------------------------
+
+alter table employee_payroll enable row level security;
+
+create policy "Owner voit la paye de son organisation"
+  on employee_payroll for select
+  using (is_org_owner(org_id));
+
+create policy "Owner crée les infos de paye"
+  on employee_payroll for insert
+  with check (is_org_owner(org_id));
+
+create policy "Owner modifie les infos de paye"
+  on employee_payroll for update
+  using (is_org_owner(org_id))
+  with check (is_org_owner(org_id));
+
+-- ------------------------------------------------------------
+-- RLS : leaves — le manager crée/approuve, l'employé voit seulement les siens.
+-- ------------------------------------------------------------
+
+alter table leaves enable row level security;
+
+create policy "Owner voit les congés de son organisation"
+  on leaves for select
+  using (is_org_owner(org_id));
+
+create policy "Employé voit ses propres congés"
+  on leaves for select
+  using (is_own_employee(employee_id));
+
+create policy "Owner crée des congés"
+  on leaves for insert
+  with check (is_org_owner(org_id));
+
+create policy "Owner approuve ou rejette les congés"
+  on leaves for update
+  using (is_org_owner(org_id))
+  with check (is_org_owner(org_id));
+
+-- ------------------------------------------------------------
+-- RLS : audit_log — lecture manager uniquement, écriture réservée aux
+-- triggers (security definer), aucune policy d'insertion pour le client.
+-- ------------------------------------------------------------
+
+alter table audit_log enable row level security;
+
+create policy "Owner voit le journal d'audit de son organisation"
+  on audit_log for select
+  using (is_org_owner(org_id));

@@ -5,6 +5,8 @@ const NAV_ITEMS = [
   { to: '/dashboard', label: 'Tableau de bord', end: true },
   { to: '/dashboard/employees', label: 'Employés' },
   { to: '/dashboard/pointages', label: 'Pointages' },
+  { to: '/dashboard/leaves', label: 'Congés' },
+  { to: '/dashboard/reports', label: 'Rapports' },
 ]
 
 export default function DashboardLayout() {

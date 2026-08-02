@@ -229,6 +229,7 @@ export default function Pointages() {
               <tr className="border-b border-border text-text-muted">
                 <th className="px-4 py-3 font-medium">Photo</th>
                 <th className="px-4 py-3 font-medium">Employé</th>
+                <th className="px-4 py-3 font-medium">Type</th>
                 <th className="px-4 py-3 font-medium">Date &amp; heure</th>
                 <th className="px-4 py-3 font-medium">Position</th>
               </tr>
@@ -241,6 +242,15 @@ export default function Pointages() {
                   </td>
                   <td className="px-4 py-2 font-medium text-text">
                     {p.employees?.first_name} {p.employees?.last_name}
+                  </td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        p.type === 'sortie' ? 'bg-danger-soft text-danger' : 'bg-success-soft text-success'
+                      }`}
+                    >
+                      {p.type === 'sortie' ? 'Sortie' : 'Entrée'}
+                    </span>
                   </td>
                   <td className="px-4 py-2 text-text-muted">{formatDateTimeStr(new Date(p.time))}</td>
                   <td className="px-4 py-2">
