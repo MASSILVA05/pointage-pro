@@ -2,7 +2,89 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { formatDateStr } from '../lib/dateFormat'
-import { BUTTON_PRIMARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../lib/ui'
+import { downloadJson } from '../lib/backup'
+import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../lib/ui'
+
+function DeleteOrgModal({ org, onClose, onDeleted }) {
+  const [confirmText, setConfirmText] = useState('')
+  const [step, setStep] = useState('confirm') // confirm -> exporting -> deleting
+  const [error, setError] = useState('')
+
+  const canDelete = confirmText === org.name
+
+  async function handleDelete() {
+    if (!canDelete) return
+    setError('')
+    try {
+      setStep('exporting')
+      const { data: backup, error: exportError } = await supabase.rpc('admin_export_client_data', {
+        p_org_id: org.id,
+      })
+      if (exportError) throw exportError
+
+      const stamp = new Date().toISOString().slice(0, 10)
+      downloadJson(backup, `backup-${org.name.replace(/[^a-z0-9]+/gi, '_')}-${stamp}.json`)
+
+      setStep('deleting')
+      const { error: deleteError } = await supabase.rpc('admin_delete_client', {
+        p_org_id: org.id,
+        p_confirm_name: confirmText,
+      })
+      if (deleteError) throw deleteError
+
+      onDeleted()
+    } catch (err) {
+      setError(err.message)
+      setStep('confirm')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-text/40 p-4">
+      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-lg">
+        <h2 className="text-sm font-semibold text-danger">Supprimer définitivement "{org.name}"</h2>
+        <p className="mt-3 text-sm text-text-muted">
+          Cette action est <strong>irréversible</strong> : organisation, employés, pointages, congés, paye et
+          comptes de connexion (patron et employés) seront effacés définitivement. Une sauvegarde JSON de toutes
+          ces données sera téléchargée automatiquement avant la suppression.
+        </p>
+        <div className="mt-4">
+          <label htmlFor="confirmOrgName" className={LABEL_CLASS}>
+            Retapez le nom exact de l'organisation pour confirmer : <strong>{org.name}</strong>
+          </label>
+          <input
+            id="confirmOrgName"
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            disabled={step !== 'confirm'}
+            className={INPUT_CLASS}
+            autoComplete="off"
+          />
+        </div>
+
+        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={step !== 'confirm'} className={BUTTON_SECONDARY_CLASS}>
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={!canDelete || step !== 'confirm'}
+            className="rounded-md bg-danger px-4 py-2 text-sm font-medium text-white hover:bg-danger disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {step === 'exporting'
+              ? 'Sauvegarde en cours…'
+              : step === 'deleting'
+                ? 'Suppression en cours…'
+                : 'Supprimer définitivement'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function StatusBadge({ active }) {
   return (
@@ -21,6 +103,7 @@ export default function Admin() {
   const [orgs, setOrgs] = useState([])
   const [loading, setLoading] = useState(true)
   const [actioningId, setActioningId] = useState(null)
+  const [deletingOrg, setDeletingOrg] = useState(null)
 
   const [orgName, setOrgName] = useState('')
   const [ownerName, setOwnerName] = useState('')
@@ -219,18 +302,27 @@ export default function Admin() {
                       <StatusBadge active={org.active} />
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        disabled={actioningId === org.id}
-                        onClick={() => toggleActive(org)}
-                        className={`rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-50 ${
-                          org.active
-                            ? 'border-danger text-danger hover:bg-danger-soft'
-                            : 'border-success text-success hover:bg-success-soft'
-                        }`}
-                      >
-                        {org.active ? 'Désactiver' : 'Réactiver'}
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={actioningId === org.id}
+                          onClick={() => toggleActive(org)}
+                          className={`rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-50 ${
+                            org.active
+                              ? 'border-danger text-danger hover:bg-danger-soft'
+                              : 'border-success text-success hover:bg-success-soft'
+                          }`}
+                        >
+                          {org.active ? 'Désactiver' : 'Réactiver'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeletingOrg(org)}
+                          className="rounded-md border border-danger px-2 py-1 text-xs font-medium text-danger hover:bg-danger-soft"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -239,6 +331,17 @@ export default function Admin() {
           )}
         </div>
       </div>
+
+      {deletingOrg && (
+        <DeleteOrgModal
+          org={deletingOrg}
+          onClose={() => setDeletingOrg(null)}
+          onDeleted={async () => {
+            setDeletingOrg(null)
+            await load()
+          }}
+        />
+      )}
     </div>
   )
 }

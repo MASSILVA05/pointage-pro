@@ -1,13 +1,25 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { BUTTON_PRIMARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../../lib/ui'
 
 export default function Overview() {
-  const { org } = useAuth()
+  const { org, employee, session, refreshRole } = useAuth()
   const [seatsTotal, setSeatsTotal] = useState(0)
   const [employeesCount, setEmployeesCount] = useState(0)
   const [loading, setLoading] = useState(true)
+
+  // Un patron peut aussi être employé "opérationnel" de sa propre
+  // organisation (ex : gérant qui pointe ses heures comme les autres). On
+  // lui propose ici d'associer directement son compte manager (déjà
+  // authentifié) à une fiche employé existante non liée, plutôt que de le
+  // faire passer par le flux d'invitation par téléphone conçu pour des
+  // comptes séparés — ce détour a déjà causé des soucis pour ce cas précis.
+  const [unlinkedEmployees, setUnlinkedEmployees] = useState([])
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('')
+  const [linking, setLinking] = useState(false)
+  const [linkError, setLinkError] = useState('')
 
   const [seats, setSeats] = useState('')
   const [price, setPrice] = useState('')
@@ -17,12 +29,14 @@ export default function Overview() {
 
   async function load() {
     setLoading(true)
-    const [{ data: packs }, { count }] = await Promise.all([
+    const [{ data: packs }, { count }, { data: unlinked }] = await Promise.all([
       supabase.from('packs').select('seats').eq('org_id', org.id),
       supabase.from('employees').select('id', { count: 'exact', head: true }).eq('org_id', org.id),
+      supabase.from('employees').select('id, first_name, last_name, matricule').eq('org_id', org.id).is('user_id', null),
     ])
     setSeatsTotal((packs ?? []).reduce((sum, p) => sum + p.seats, 0))
     setEmployeesCount(count ?? 0)
+    setUnlinkedEmployees(unlinked ?? [])
     setLoading(false)
   }
 
@@ -30,6 +44,28 @@ export default function Overview() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org.id])
+
+  async function handleLinkSelf(e) {
+    e.preventDefault()
+    setLinkError('')
+    if (!selectedEmployeeId) return
+
+    setLinking(true)
+    try {
+      const { error } = await supabase
+        .from('employees')
+        .update({ user_id: session.user.id, status: 'active' })
+        .eq('id', selectedEmployeeId)
+      if (error) throw error
+      await refreshRole()
+      await load()
+      setSelectedEmployeeId('')
+    } catch (err) {
+      setLinkError(err.message)
+    } finally {
+      setLinking(false)
+    }
+  }
 
   async function handleBuyPack(e) {
     e.preventDefault()
@@ -148,6 +184,49 @@ export default function Overview() {
               {copied ? 'Copié !' : 'Copier'}
             </button>
           </div>
+        </div>
+
+        <div className={`${CARD_CLASS} sm:col-span-2`}>
+          <h2 className="mb-3 text-sm font-semibold text-text">Votre pointage</h2>
+          {employee ? (
+            <>
+              <p className="mb-3 text-sm text-text-muted">
+                Votre compte est associé à la fiche employé de {employee.first_name} {employee.last_name}.
+              </p>
+              <Link to="/pointer" className={BUTTON_PRIMARY_CLASS}>
+                Pointer mes heures
+              </Link>
+            </>
+          ) : unlinkedEmployees.length > 0 ? (
+            <>
+              <p className="mb-3 text-sm text-text-muted">
+                Vous pointez aussi vos heures comme un employé ? Associez votre compte à votre fiche existante.
+              </p>
+              <form onSubmit={handleLinkSelf} className="flex flex-col gap-3">
+                <select
+                  value={selectedEmployeeId}
+                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                  className={INPUT_CLASS}
+                >
+                  <option value="">Choisir votre fiche employé…</option>
+                  {unlinkedEmployees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.first_name} {emp.last_name}
+                      {emp.matricule ? ` (${emp.matricule})` : ''}
+                    </option>
+                  ))}
+                </select>
+                {linkError && <p className="text-sm text-danger">{linkError}</p>}
+                <button type="submit" disabled={linking || !selectedEmployeeId} className={BUTTON_PRIMARY_CLASS}>
+                  {linking ? 'Association…' : 'C\'est moi, associer mon compte'}
+                </button>
+              </form>
+            </>
+          ) : (
+            <p className="text-sm text-text-muted">
+              Vous n'êtes associé à aucune fiche employé de cette organisation.
+            </p>
+          )}
         </div>
       </div>
     </div>

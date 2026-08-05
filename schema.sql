@@ -763,3 +763,137 @@ as $$
   where org_id = p_org_id and phone = p_phone
 $$;
 grant execute on function check_pending_employee(uuid, text) to anon, authenticated;
+
+-- ============================================================
+-- V6 : suppression définitive d'un client (super admin) + le patron
+-- comme employé de sa propre organisation
+-- ============================================================
+
+-- Journal des actions super-admin irréversibles (ex : suppression de
+-- client). Volontairement une table séparée de audit_log : audit_log.org_id
+-- référence organizations ON DELETE CASCADE (V2 ci-dessus), donc toute
+-- entrée y serait supprimée en même temps que l'organisation qu'elle
+-- documente — inutile pour garder une trace après une suppression
+-- définitive. org_id/org_name ici ne sont PAS des clés étrangères,
+-- volontairement : ils doivent survivre même une fois l'organisation
+-- effacée.
+create table if not exists super_admin_action_log (
+  id uuid primary key default gen_random_uuid(),
+  actor_user_id uuid,
+  action text not null,
+  org_id uuid,
+  org_name text,
+  details jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table super_admin_action_log enable row level security;
+
+create policy "Super admin voit le journal des actions admin"
+  on super_admin_action_log for select
+  using (is_super_admin());
+
+-- Export complet des données d'une organisation (employés, paye, pointages,
+-- congés, packs) en un seul objet JSON, pour sauvegarde côté client avant
+-- suppression définitive. Réservé au super admin : les policies SELECT
+-- normales sur ces tables sont scoped à is_org_owner(), le super admin n'a
+-- donc par défaut aucun accès à ces données sans cette fonction dédiée.
+-- invite_token exclu du JSON exporté (pas de raison de le faire fuiter dans
+-- un fichier de sauvegarde qui peut circuler).
+create or replace function admin_export_client_data(p_org_id uuid) returns jsonb
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_result jsonb;
+begin
+  if not is_super_admin() then
+    raise exception 'Réservé au super administrateur';
+  end if;
+
+  select jsonb_build_object(
+    'exported_at', now(),
+    'organization', to_jsonb(o) - 'invite_token',
+    'employees', coalesce((select jsonb_agg(to_jsonb(e)) from employees e where e.org_id = p_org_id), '[]'::jsonb),
+    'employee_payroll', coalesce((select jsonb_agg(to_jsonb(p)) from employee_payroll p where p.org_id = p_org_id), '[]'::jsonb),
+    'pointages', coalesce((select jsonb_agg(to_jsonb(pt)) from pointages pt where pt.org_id = p_org_id), '[]'::jsonb),
+    'leaves', coalesce((select jsonb_agg(to_jsonb(l)) from leaves l where l.org_id = p_org_id), '[]'::jsonb),
+    'packs', coalesce((select jsonb_agg(to_jsonb(pk)) from packs pk where pk.org_id = p_org_id), '[]'::jsonb)
+  ) into v_result
+  from organizations o where o.id = p_org_id;
+
+  if v_result is null then
+    raise exception 'Organisation introuvable';
+  end if;
+
+  return v_result;
+end;
+$$;
+grant execute on function admin_export_client_data(uuid) to authenticated;
+
+-- Suppression définitive et irréversible d'un client : organisation,
+-- employés, pointages, congés, paye, packs (tout cascade déjà en place via
+-- les FK "on delete cascade" existantes sur organizations/employees), et
+-- les comptes auth.users associés (patron + employés liés) qui eux ne sont
+-- PAS des enfants de organizations donc jamais supprimés automatiquement.
+--
+-- Connu et volontairement hors scope : les photos de pointage dans le
+-- bucket Storage "pointage-photos" ne sont pas supprimées (Storage n'est
+-- pas concerné par les FK Postgres). Limite acceptée pour l'instant.
+--
+-- p_confirm_name doit correspondre exactement au nom de l'organisation :
+-- deuxième vérification côté serveur, ne fait pas confiance uniquement à la
+-- confirmation côté client (qui pourrait être contournée par un appel RPC
+-- direct avec n'importe quelle valeur).
+create or replace function admin_delete_client(p_org_id uuid, p_confirm_name text) returns jsonb
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_org organizations%rowtype;
+  v_employee_user_ids uuid[];
+  v_employees_count integer;
+  v_pointages_count integer;
+begin
+  if not is_super_admin() then
+    raise exception 'Réservé au super administrateur';
+  end if;
+
+  select * into v_org from organizations where id = p_org_id;
+  if not found then
+    raise exception 'Organisation introuvable';
+  end if;
+
+  if p_confirm_name is distinct from v_org.name then
+    raise exception 'Le nom de confirmation ne correspond pas au nom exact de l''organisation';
+  end if;
+
+  select array_agg(user_id) into v_employee_user_ids
+  from employees where org_id = p_org_id and user_id is not null;
+  select count(*) into v_employees_count from employees where org_id = p_org_id;
+  select count(*) into v_pointages_count from pointages where org_id = p_org_id;
+
+  insert into super_admin_action_log (actor_user_id, action, org_id, org_name, details)
+  values (
+    auth.uid(), 'org_deleted', p_org_id, v_org.name,
+    jsonb_build_object(
+      'owner_name', v_org.owner_name,
+      'owner_phone', v_org.owner_phone,
+      'employees_count', v_employees_count,
+      'pointages_count', v_pointages_count
+    )
+  );
+
+  if v_employee_user_ids is not null then
+    delete from auth.users where id = any(v_employee_user_ids);
+  end if;
+
+  -- Supprime le compte du patron en dernier : organizations.owner_user_id
+  -- référence auth.users ON DELETE CASCADE (V1 ci-dessus), donc cette seule
+  -- suppression cascade automatiquement vers organizations, puis vers
+  -- packs/employees/pointages/employee_payroll/leaves/audit_log (tous déjà
+  -- "on delete cascade" sur organizations ou employees).
+  delete from auth.users where id = v_org.owner_user_id;
+
+  return jsonb_build_object('deleted', true, 'org_name', v_org.name, 'employees_count', v_employees_count);
+end;
+$$;
+grant execute on function admin_delete_client(uuid, text) to authenticated;

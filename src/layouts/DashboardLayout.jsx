@@ -10,7 +10,7 @@ const NAV_ITEMS = [
 ]
 
 export default function DashboardLayout() {
-  const { org, signOut } = useAuth()
+  const { org, employee, signOut } = useAuth()
 
   if (!org.active) {
     return (
@@ -56,6 +56,17 @@ export default function DashboardLayout() {
             </NavLink>
           ))}
         </nav>
+
+        {employee && (
+          <div className="border-t border-border p-3">
+            <NavLink
+              to="/pointer"
+              className="flex items-center justify-center rounded-md bg-accent-soft px-3 py-2 text-sm font-medium text-accent hover:bg-accent-soft/80"
+            >
+              Pointer mes heures
+            </NavLink>
+          </div>
+        )}
 
         <div className="border-t border-border p-3">
           <button
