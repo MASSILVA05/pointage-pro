@@ -79,10 +79,27 @@ export default function Invite() {
       const normalizedPhone = normalizePhone(phone)
       const email = phoneToEmail(normalizedPhone)
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password })
-      if (signUpError) throw signUpError
 
-      let session = signUpData.session
-      if (!session) {
+      let session = signUpData?.session
+
+      if (signUpError) {
+        if (signUpError.message !== 'User already registered') throw signUpError
+
+        // Un compte existe déjà pour ce numéro : probablement une tentative
+        // précédente où signUp() a réussi mais où l'étape suivante (activer
+        // la fiche employé) a échoué ou a été interrompue, laissant l'employé
+        // bloqué sans jamais pouvoir terminer son inscription. On tente de
+        // reprendre avec le mot de passe fourni maintenant plutôt que de
+        // renvoyer une erreur définitive.
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+        if (signInError) {
+          setError(
+            "Un compte existe déjà pour ce numéro, mais ce mot de passe ne correspond pas. Si c'est votre compte, essayez de vous connecter, sinon contactez votre manager."
+          )
+          return
+        }
+        session = signInData.session
+      } else if (!session) {
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -100,7 +117,13 @@ export default function Invite() {
       await refreshRole()
       navigate('/pointer')
     } catch (err) {
-      setError(err.message === 'User already registered' ? 'Ce numéro est déjà utilisé' : err.message)
+      // Certaines erreurs (ex : réponse serveur sans corps JSON exploitable)
+      // remontent avec un message vide ou littéralement "{}" — jamais
+      // affiché tel quel, on retombe sur un message générique dans ce cas.
+      console.error('Invite handlePasswordSubmit:', err)
+      const message = typeof err?.message === 'string' ? err.message.trim() : ''
+      const isUsable = message && message !== '{}' && message !== '[object Object]'
+      setError(isUsable ? message : 'Une erreur est survenue lors de la création du compte. Réessayez, ou contactez votre manager si le problème persiste.')
     } finally {
       setLoading(false)
     }
