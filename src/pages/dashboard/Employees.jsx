@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { normalizePhone } from '../../lib/phone'
 import { formatDateStr, formatIsoDateOnly } from '../../lib/dateFormat'
-import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS, CARD_CLASS } from '../../lib/ui'
+import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS, CARD_CLASS, INPUT_CLASS } from '../../lib/ui'
 import ExcelImportModal from '../../components/ExcelImportModal'
 import EditEmployeeModal from '../../components/EditEmployeeModal'
 import { EmployeeFormFields } from '../../components/EmployeeFormFields'
@@ -68,6 +68,7 @@ export default function Employees() {
   const [addError, setAddError] = useState('')
   const [showImport, setShowImport] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState(null)
+  const [search, setSearch] = useState('')
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -92,6 +93,13 @@ export default function Employees() {
   }, [org.id])
 
   const quotaReached = employees.length >= seatsTotal
+
+  const searchNorm = search.trim().toLowerCase()
+  const filteredEmployees = searchNorm
+    ? employees.filter((emp) =>
+        [emp.first_name, emp.last_name, emp.matricule].some((field) => field?.toLowerCase().includes(searchNorm))
+      )
+    : employees
 
   async function handleAdd(e) {
     e.preventDefault()
@@ -201,11 +209,23 @@ export default function Employees() {
         </form>
       </div>
 
+      {employees.length > 0 && (
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Rechercher par nom, prénom ou matricule…"
+          className={`${INPUT_CLASS} max-w-sm`}
+        />
+      )}
+
       <div className={`${CARD_CLASS} overflow-x-auto p-0`}>
         {loading ? (
           <p className="p-5 text-sm text-text-muted">Chargement…</p>
         ) : employees.length === 0 ? (
           <p className="p-5 text-sm text-text-muted">Aucun employé pour le moment</p>
+        ) : filteredEmployees.length === 0 ? (
+          <p className="p-5 text-sm text-text-muted">Aucun employé ne correspond à « {search} »</p>
         ) : (
           <table className="w-full text-left text-sm">
             <thead>
@@ -221,7 +241,7 @@ export default function Employees() {
               </tr>
             </thead>
             <tbody>
-              {employees.map((emp) => (
+              {filteredEmployees.map((emp) => (
                 <tr
                   key={emp.id}
                   onClick={() => setEditingEmployee(emp)}
