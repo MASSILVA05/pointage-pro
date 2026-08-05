@@ -743,3 +743,23 @@ create policy "Owner modifie les employés de son organisation"
   on employees for update
   using (is_org_owner(org_id))
   with check (is_org_owner(org_id));
+
+-- check_pending_employee filtrait status='pending' directement dans la
+-- requête : un téléphone correspondant à un employé déjà 'active' (compte
+-- déjà créé) renvoyait 0 ligne, exactement comme un téléphone inconnu — le
+-- message affiché côté client ("numéro non enregistré") était donc ambigu
+-- et trompeur dans ce cas précis. On retire le filtre et on renvoie le
+-- statut : la page d'invitation distingue maintenant "numéro inconnu" de
+-- "compte déjà activé". Signature de retour changée (colonne status en
+-- plus) : DROP obligatoire, CREATE OR REPLACE seul refuse de changer le
+-- type de retour d'une fonction existante.
+drop function if exists check_pending_employee(uuid, text);
+
+create function check_pending_employee(p_org_id uuid, p_phone text)
+returns table(id uuid, first_name text, status text)
+language sql stable security definer set search_path = public
+as $$
+  select id, first_name, status from employees
+  where org_id = p_org_id and phone = p_phone
+$$;
+grant execute on function check_pending_employee(uuid, text) to anon, authenticated;

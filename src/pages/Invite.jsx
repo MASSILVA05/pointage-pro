@@ -49,7 +49,11 @@ export default function Invite() {
       })
       if (rpcError) throw rpcError
       if (!data || data.length === 0) {
-        setError("Ce numéro n'est pas enregistré par votre employeur. Contactez-le.")
+        setError("Ce numéro n'est pas enregistré par votre employeur pour cette organisation. Contactez-le.")
+        return
+      }
+      if (data[0].status !== 'pending') {
+        setError('Un compte existe déjà pour ce numéro. Essayez de vous connecter, ou contactez votre manager si vous avez oublié votre mot de passe.')
         return
       }
       setMatchedEmployee(data[0])
