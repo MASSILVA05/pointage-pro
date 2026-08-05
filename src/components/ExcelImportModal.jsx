@@ -3,24 +3,23 @@ import { supabase } from '../lib/supabase'
 import { parseEmployeesWorkbook } from '../lib/employeeImport'
 import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS } from '../lib/ui'
 
-function validateRows(rows, existingEmployees, seatsRemaining) {
+export function validateRows(rows, existingEmployees, seatsRemaining) {
   const existingPhones = new Set(existingEmployees.map((e) => e.phone))
   const seenPhones = new Set()
   let validCount = 0
 
   return rows.map((row) => {
     let error = null
-    if (!row.phone) error = 'Téléphone manquant'
-    else if (!row.first_name || !row.last_name) error = 'Nom ou prénom manquant'
-    else if (existingPhones.has(row.phone)) error = 'Téléphone déjà existant dans l\'organisation'
-    else if (seenPhones.has(row.phone)) error = 'Téléphone en double dans le fichier'
+    if (!row.first_name || !row.last_name) error = 'Nom ou prénom manquant'
+    else if (row.phone && existingPhones.has(row.phone)) error = 'Téléphone déjà existant dans l\'organisation'
+    else if (row.phone && seenPhones.has(row.phone)) error = 'Téléphone en double dans le fichier'
     else if (validCount >= seatsRemaining) error = 'Quota de places atteint'
 
     if (!error) {
-      seenPhones.add(row.phone)
+      if (row.phone) seenPhones.add(row.phone)
       validCount += 1
     }
-    return { ...row, error, willImport: !error }
+    return { ...row, error, missingPhone: !row.phone, willImport: !error }
   })
 }
 
@@ -133,6 +132,8 @@ export default function ExcelImportModal({ orgId, existingEmployees, seatsRemain
               <p className="text-sm text-text-muted">
                 {toImport.length} ligne{toImport.length > 1 ? 's' : ''} à importer sur {rows.length}
                 {rows.length - toImport.length > 0 && ` (${rows.length - toImport.length} en erreur, ignorée${rows.length - toImport.length > 1 ? 's' : ''})`}
+                {toImport.filter((r) => r.missingPhone).length > 0 &&
+                  ` — dont ${toImport.filter((r) => r.missingPhone).length} sans téléphone (invitation impossible tant qu'il n'est pas ajouté)`}
               </p>
               <div className="overflow-x-auto rounded-md border border-border">
                 <table className="w-full text-left text-sm">
@@ -158,7 +159,14 @@ export default function ExcelImportModal({ orgId, existingEmployees, seatsRemain
                           {row.error ? (
                             <span className="text-danger">{row.error}</span>
                           ) : (
-                            <span className="text-success">À importer</span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="text-success">À importer</span>
+                              {row.missingPhone && (
+                                <span className="inline-flex items-center rounded-full bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
+                                  Téléphone manquant
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -197,6 +205,14 @@ export default function ExcelImportModal({ orgId, existingEmployees, seatsRemain
                   `, ${results.filter((r) => !r.imported).length} échec${results.filter((r) => !r.imported).length > 1 ? 's' : ''}`}
                 .
               </p>
+              {results.filter((r) => r.imported && r.missingPhone).length > 0 && (
+                <p className="text-sm text-warning">
+                  {results.filter((r) => r.imported && r.missingPhone).length} employé
+                  {results.filter((r) => r.imported && r.missingPhone).length > 1 ? 's' : ''} importé
+                  {results.filter((r) => r.imported && r.missingPhone).length > 1 ? 's' : ''} sans téléphone : invitation
+                  impossible tant qu'un téléphone n'est pas ajouté sur leur fiche.
+                </p>
+              )}
               {results.some((r) => !r.imported) && (
                 <div className="overflow-x-auto rounded-md border border-border">
                   <table className="w-full text-left text-sm">

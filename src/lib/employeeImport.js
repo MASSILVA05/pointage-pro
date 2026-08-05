@@ -139,7 +139,7 @@ export async function parseEmployeesWorkbook(file) {
       rowNumber: r,
       first_name: firstName,
       last_name: lastName,
-      phone: normalizePhone(phoneRaw),
+      phone: normalizePhone(phoneRaw) || null,
       phone_raw: phoneRaw,
       matricule: cellText(get('matricule')) || null,
       social_security_number: cellText(get('social_security_number')) || null,

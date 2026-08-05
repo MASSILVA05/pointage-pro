@@ -716,3 +716,17 @@ alter table employee_payroll
   add column if not exists bank_name text,
   add column if not exists bank_branch text,
   add column if not exists loan_balance numeric(12, 2);
+
+-- ============================================================
+-- V5 : téléphone optionnel à l'import Excel
+-- ============================================================
+--
+-- L'import en masse ne doit plus bloquer une ligne pour absence de
+-- téléphone (courant sur les listes RH existantes) : la fiche est créée en
+-- 'pending' comme les autres, simplement sans possibilité d'invitation
+-- (check_pending_employee/l'activation par téléphone) tant qu'un téléphone
+-- n'est pas ajouté manuellement. La contrainte unique sur phone reste en
+-- place ; Postgres autorise nativement plusieurs NULL sous une contrainte
+-- unique (NULL n'est jamais égal à NULL), donc aucune ligne supplémentaire
+-- n'est nécessaire pour ça.
+alter table employees alter column phone drop not null;
