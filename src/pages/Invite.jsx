@@ -79,11 +79,15 @@ export default function Invite() {
       const normalizedPhone = normalizePhone(phone)
       const email = phoneToEmail(normalizedPhone)
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password })
+      console.log('[Invite] signUp:', { hasSession: !!signUpData?.session, error: signUpError?.message })
 
       let session = signUpData?.session
 
       if (signUpError) {
-        if (signUpError.message !== 'User already registered') throw signUpError
+        if (signUpError.message !== 'User already registered') {
+          setError(`Impossible de créer le compte (${signUpError.message || 'erreur inconnue du serveur'}). Réessayez, ou contactez votre manager.`)
+          return
+        }
 
         // Un compte existe déjà pour ce numéro : probablement une tentative
         // précédente où signUp() a réussi mais où l'étape suivante (activer
@@ -92,9 +96,10 @@ export default function Invite() {
         // reprendre avec le mot de passe fourni maintenant plutôt que de
         // renvoyer une erreur définitive.
         const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+        console.log('[Invite] signIn (compte existant):', { hasSession: !!signInData?.session, error: signInError?.message })
         if (signInError) {
           setError(
-            "Un compte existe déjà pour ce numéro, mais ce mot de passe ne correspond pas. Si c'est votre compte, essayez de vous connecter, sinon contactez votre manager."
+            "Un compte existe déjà pour ce numéro, mais ce mot de passe ne correspond pas à celui utilisé lors de votre première inscription. Retapez le mot de passe d'origine, ou contactez votre manager pour recommencer."
           )
           return
         }
@@ -104,26 +109,59 @@ export default function Invite() {
           email,
           password,
         })
-        if (signInError) throw signInError
+        console.log('[Invite] signIn (session absente après signUp):', { hasSession: !!signInData?.session, error: signInError?.message })
+        if (signInError) {
+          setError(`Compte créé mais connexion impossible (${signInError.message}). Réessayez.`)
+          return
+        }
         session = signInData.session
       }
 
-      const { error: updateError } = await supabase
+      if (!session?.user?.id) {
+        setError('Compte créé mais session introuvable. Réessayez, ou contactez votre manager.')
+        return
+      }
+
+      // .select() est indispensable ici : sans lui, une mise à jour qui ne
+      // trouve aucune ligne visible (RLS) renvoie [] avec un HTTP 200, sans
+      // aucune erreur — le code continuerait silencieusement comme si la
+      // fiche employé avait été liée alors que ce n'est pas le cas (vérifié
+      // en reproduisant l'appel réel : PATCH sur une ligne RLS-bloquée →
+      // `[]` / 200, pas d'erreur). C'est précisément ce cas silencieux qui
+      // manquait de gestion avant ce correctif.
+      const { data: updateData, error: updateError } = await supabase
         .from('employees')
         .update({ user_id: session.user.id, status: 'active' })
         .eq('id', matchedEmployee.id)
-      if (updateError) throw updateError
+        .select()
+      console.log('[Invite] update employees:', { rowsAffected: updateData?.length ?? 0, error: updateError?.message })
+
+      if (updateError) {
+        setError(`Compte créé mais fiche employé non mise à jour (${updateError.message}). Contactez votre manager : votre compte existe mais n'est pas encore lié à votre fiche.`)
+        return
+      }
+      if (!updateData || updateData.length === 0) {
+        setError(
+          "Compte créé mais votre fiche employé n'a pas pu être liée (elle a peut-être déjà été activée par une tentative précédente, ou le téléphone enregistré diffère légèrement). Contactez votre manager pour vérifier votre fiche."
+        )
+        return
+      }
 
       await refreshRole()
       navigate('/pointer')
     } catch (err) {
-      // Certaines erreurs (ex : réponse serveur sans corps JSON exploitable)
-      // remontent avec un message vide ou littéralement "{}" — jamais
-      // affiché tel quel, on retombe sur un message générique dans ce cas.
-      console.error('Invite handlePasswordSubmit:', err)
+      // Filet de sécurité pour tout ce qui n'est pas déjà couvert par un
+      // message spécifique ci-dessus. Certaines erreurs (ex : réponse
+      // serveur sans corps JSON exploitable) remontent avec un message vide
+      // ou littéralement "{}" — jamais affiché tel quel.
+      console.error('[Invite] handlePasswordSubmit, erreur inattendue:', err)
       const message = typeof err?.message === 'string' ? err.message.trim() : ''
       const isUsable = message && message !== '{}' && message !== '[object Object]'
-      setError(isUsable ? message : 'Une erreur est survenue lors de la création du compte. Réessayez, ou contactez votre manager si le problème persiste.')
+      setError(
+        isUsable
+          ? `Erreur inattendue (${message}). Contactez votre manager.`
+          : 'Erreur inattendue lors de la création du compte. Contactez votre manager en lui indiquant à quel moment vous avez essayé.'
+      )
     } finally {
       setLoading(false)
     }
