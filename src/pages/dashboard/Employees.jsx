@@ -3,8 +3,10 @@ import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { normalizePhone } from '../../lib/phone'
 import { formatDateStr, formatIsoDateOnly } from '../../lib/dateFormat'
-import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS, CARD_CLASS, INPUT_CLASS, LABEL_CLASS } from '../../lib/ui'
+import { BUTTON_PRIMARY_CLASS, BUTTON_SECONDARY_CLASS, CARD_CLASS } from '../../lib/ui'
 import ExcelImportModal from '../../components/ExcelImportModal'
+import EditEmployeeModal from '../../components/EditEmployeeModal'
+import { EmployeeFormFields } from '../../components/EmployeeFormFields'
 
 function StatusBadge({ status }) {
   const isActive = status === 'active'
@@ -54,14 +56,6 @@ const EMPTY_FORM = {
   loan_balance: '',
 }
 
-function SectionTitle({ children }) {
-  return (
-    <div className="sm:col-span-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
-      <p className="mb-3 text-xs font-medium tracking-wide text-text-faint uppercase">{children}</p>
-    </div>
-  )
-}
-
 export default function Employees() {
   const { org } = useAuth()
   const [employees, setEmployees] = useState([])
@@ -73,6 +67,7 @@ export default function Employees() {
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
   const [showImport, setShowImport] = useState(false)
+  const [editingEmployee, setEditingEmployee] = useState(null)
 
   function setField(field, value) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -194,311 +189,7 @@ export default function Employees() {
       <div className={CARD_CLASS}>
         <h2 className="mb-3 text-sm font-semibold text-text">Ajouter un employé</h2>
         <form onSubmit={handleAdd} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <SectionTitle>Identité</SectionTitle>
-
-          <div>
-            <label htmlFor="firstName" className={LABEL_CLASS}>
-              Prénom
-            </label>
-            <input
-              id="firstName"
-              required
-              value={form.first_name}
-              onChange={(e) => setField('first_name', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="lastName" className={LABEL_CLASS}>
-              Nom
-            </label>
-            <input
-              id="lastName"
-              required
-              value={form.last_name}
-              onChange={(e) => setField('last_name', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="empPhone" className={LABEL_CLASS}>
-              Téléphone
-            </label>
-            <input
-              id="empPhone"
-              type="tel"
-              required
-              value={form.phone}
-              onChange={(e) => setField('phone', e.target.value)}
-              placeholder="0555 12 34 56"
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="matricule" className={LABEL_CLASS}>
-              Matricule
-            </label>
-            <input
-              id="matricule"
-              value={form.matricule}
-              onChange={(e) => setField('matricule', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="birthdate" className={LABEL_CLASS}>
-              Date de naissance
-            </label>
-            <input
-              id="birthdate"
-              type="date"
-              value={form.birthdate}
-              onChange={(e) => setField('birthdate', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="birthPlace" className={LABEL_CLASS}>
-              Lieu de naissance
-            </label>
-            <input
-              id="birthPlace"
-              value={form.birth_place}
-              onChange={(e) => setField('birth_place', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="familyStatus" className={LABEL_CLASS}>
-              Situation familiale
-            </label>
-            <select
-              id="familyStatus"
-              value={form.family_status}
-              onChange={(e) => setField('family_status', e.target.value)}
-              className={INPUT_CLASS}
-            >
-              <option value="">—</option>
-              <option value="Célibataire">Célibataire</option>
-              <option value="Marié">Marié</option>
-              <option value="Divorcé">Divorcé</option>
-              <option value="Veuf">Veuf</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="address" className={LABEL_CLASS}>
-              Adresse
-            </label>
-            <input
-              id="address"
-              value={form.address}
-              onChange={(e) => setField('address', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-
-          <SectionTitle>Contrat</SectionTitle>
-
-          <div>
-            <label htmlFor="jobTitle" className={LABEL_CLASS}>
-              Poste / Fonction
-            </label>
-            <input
-              id="jobTitle"
-              value={form.job_title}
-              onChange={(e) => setField('job_title', e.target.value)}
-              placeholder="Ouvrier de conditionnement"
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="contractType" className={LABEL_CLASS}>
-              Type de contrat
-            </label>
-            <select
-              id="contractType"
-              value={form.contract_type}
-              onChange={(e) => setField('contract_type', e.target.value)}
-              className={INPUT_CLASS}
-            >
-              <option value="">—</option>
-              <option value="CDI">CDI</option>
-              <option value="CDD">CDD</option>
-              <option value="Permanent">Permanent</option>
-              <option value="Contractuel">Contractuel</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="hireDate" className={LABEL_CLASS}>
-              Date d'entrée
-            </label>
-            <input
-              id="hireDate"
-              type="date"
-              value={form.hire_date}
-              onChange={(e) => setField('hire_date', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="contractStart" className={LABEL_CLASS}>
-              Début de contrat
-            </label>
-            <input
-              id="contractStart"
-              type="date"
-              value={form.contract_start_date}
-              onChange={(e) => setField('contract_start_date', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="contractEnd" className={LABEL_CLASS}>
-              Fin de contrat
-            </label>
-            <input
-              id="contractEnd"
-              type="date"
-              value={form.contract_end_date}
-              onChange={(e) => setField('contract_end_date', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="terminationDate" className={LABEL_CLASS}>
-              Date de sortie
-            </label>
-            <input
-              id="terminationDate"
-              type="date"
-              value={form.termination_date}
-              onChange={(e) => setField('termination_date', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="terminationReason" className={LABEL_CLASS}>
-              Motif de sortie
-            </label>
-            <input
-              id="terminationReason"
-              value={form.termination_reason}
-              onChange={(e) => setField('termination_reason', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-
-          <SectionTitle>Administratif &amp; paye (visible par vous uniquement)</SectionTitle>
-
-          <div>
-            <label htmlFor="ssn" className={LABEL_CLASS}>
-              Numéro de sécurité sociale
-            </label>
-            <input id="ssn" value={form.ssn} onChange={(e) => setField('ssn', e.target.value)} className={INPUT_CLASS} />
-          </div>
-          <div>
-            <label htmlFor="cnasFund" className={LABEL_CLASS}>
-              Caisse CNAS
-            </label>
-            <input
-              id="cnasFund"
-              value={form.cnas_fund}
-              onChange={(e) => setField('cnas_fund', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="payType" className={LABEL_CLASS}>
-              Type de paye
-            </label>
-            <select
-              id="payType"
-              value={form.pay_type}
-              onChange={(e) => setField('pay_type', e.target.value)}
-              className={INPUT_CLASS}
-            >
-              <option value="hourly">Horaire</option>
-              <option value="monthly">Mensuelle</option>
-            </select>
-          </div>
-          {form.pay_type === 'hourly' ? (
-            <div>
-              <label htmlFor="hourlyRate" className={LABEL_CLASS}>
-                Taux horaire
-              </label>
-              <input
-                id="hourlyRate"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.hourly_rate}
-                onChange={(e) => setField('hourly_rate', e.target.value)}
-                className={INPUT_CLASS}
-              />
-            </div>
-          ) : (
-            <div>
-              <label htmlFor="monthlySalary" className={LABEL_CLASS}>
-                Salaire mensuel
-              </label>
-              <input
-                id="monthlySalary"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.monthly_salary}
-                onChange={(e) => setField('monthly_salary', e.target.value)}
-                className={INPUT_CLASS}
-              />
-            </div>
-          )}
-          <div>
-            <label htmlFor="bankAccount" className={LABEL_CLASS}>
-              RIB / Compte bancaire
-            </label>
-            <input
-              id="bankAccount"
-              value={form.bank_account}
-              onChange={(e) => setField('bank_account', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="bankName" className={LABEL_CLASS}>
-              Banque
-            </label>
-            <input
-              id="bankName"
-              value={form.bank_name}
-              onChange={(e) => setField('bank_name', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="bankBranch" className={LABEL_CLASS}>
-              Agence
-            </label>
-            <input
-              id="bankBranch"
-              value={form.bank_branch}
-              onChange={(e) => setField('bank_branch', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
-          <div>
-            <label htmlFor="loanBalance" className={LABEL_CLASS}>
-              Prêt en cours (solde à rembourser)
-            </label>
-            <input
-              id="loanBalance"
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.loan_balance}
-              onChange={(e) => setField('loan_balance', e.target.value)}
-              className={INPUT_CLASS}
-            />
-          </div>
+          <EmployeeFormFields form={form} setField={setField} idPrefix="add" />
 
           {addError && <p className="text-sm text-danger sm:col-span-2">{addError}</p>}
 
@@ -531,13 +222,17 @@ export default function Employees() {
             </thead>
             <tbody>
               {employees.map((emp) => (
-                <tr key={emp.id} className="border-b border-border last:border-0">
+                <tr
+                  key={emp.id}
+                  onClick={() => setEditingEmployee(emp)}
+                  className="cursor-pointer border-b border-border last:border-0 hover:bg-bg-hover"
+                >
                   <td className="px-4 py-3 text-text-muted">{emp.matricule || '—'}</td>
                   <td className="px-4 py-3 font-medium text-text">
                     {emp.first_name} {emp.last_name}
                   </td>
                   <td className="px-4 py-3 text-text-muted">{emp.job_title || '—'}</td>
-                  <td className="px-4 py-3 text-text-muted">{emp.phone}</td>
+                  <td className="px-4 py-3 text-text-muted">{emp.phone || '—'}</td>
                   <td className="px-4 py-3 text-text-muted">
                     {emp.birthdate ? formatIsoDateOnly(emp.birthdate) : '—'}
                   </td>
@@ -563,6 +258,18 @@ export default function Employees() {
           onClose={() => setShowImport(false)}
           onImported={async () => {
             setShowImport(false)
+            await load()
+          }}
+        />
+      )}
+
+      {editingEmployee && (
+        <EditEmployeeModal
+          employee={editingEmployee}
+          payroll={payrolls.find((p) => p.employee_id === editingEmployee.id)}
+          onClose={() => setEditingEmployee(null)}
+          onSaved={async () => {
+            setEditingEmployee(null)
             await load()
           }}
         />

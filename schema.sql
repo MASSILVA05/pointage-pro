@@ -730,3 +730,16 @@ alter table employee_payroll
 -- unique (NULL n'est jamais égal à NULL), donc aucune ligne supplémentaire
 -- n'est nécessaire pour ça.
 alter table employees alter column phone drop not null;
+
+-- Édition d'une fiche employé par le manager (ex : ajouter le téléphone
+-- manquant d'un employé importé sans, pour pouvoir ensuite l'inviter). Cette
+-- policy n'existait pas jusqu'ici : la seule policy UPDATE sur employees
+-- était réservée à l'auto-activation de l'employé via son téléphone (voir
+-- ci-dessus), pas au manager. Alignée sur is_org_owner() comme les policies
+-- UPDATE plus récentes (leaves, employee_payroll) pour bénéficier du
+-- verrouillage "organisation active" au lieu de la sous-requête brute
+-- utilisée par les policies SELECT/INSERT historiques d'employees.
+create policy "Owner modifie les employés de son organisation"
+  on employees for update
+  using (is_org_owner(org_id))
+  with check (is_org_owner(org_id));
