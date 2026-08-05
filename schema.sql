@@ -666,6 +666,17 @@ end;
 $$;
 grant execute on function record_login_result(text, boolean) to anon, authenticated;
 
+-- ------------------------------------------------------------
+-- RLS : login_lockouts — table de bookkeeping interne (identifiant =
+-- téléphone normalisé + compteur d'échecs). Aucune policy : ni le manager
+-- ni l'employé n'ont besoin d'y accéder directement, uniquement via
+-- check_login_lockout()/record_login_result() ci-dessus (security definer,
+-- même modèle que audit_log). RLS activée sans policy = accès refusé par
+-- défaut à anon/authenticated via l'API REST.
+-- ------------------------------------------------------------
+
+alter table login_lockouts enable row level security;
+
 -- ============================================================
 -- V4 : champs paye algérienne (CNAS) + import Excel en masse
 -- ============================================================
