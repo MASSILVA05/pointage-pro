@@ -5,10 +5,9 @@ import { uploadPointagePhoto } from '../lib/storage'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { dateKey } from '../lib/dateFormat'
-import { BUTTON_SECONDARY_CLASS } from '../lib/ui'
 
 export default function EmployeePointer() {
-  const { employee, signOut } = useAuth()
+  const { employee } = useAuth()
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState('')
   const [showCamera, setShowCamera] = useState(false)
@@ -17,23 +16,18 @@ export default function EmployeePointer() {
   const [recent, setRecent] = useState([])
   const [pendingType, setPendingType] = useState(null)
   const [confirmDoubleEntry, setConfirmDoubleEntry] = useState(false)
-  const [orgStatus, setOrgStatus] = useState(null)
 
   useEffect(() => {
     let active = true
     async function loadRecent() {
-      const [{ data }, { data: status }] = await Promise.all([
-        supabase
-          .from('pointages')
-          .select('type, time')
-          .eq('employee_id', employee.id)
-          .order('time', { ascending: false })
-          .limit(20),
-        supabase.rpc('get_my_org_status'),
-      ])
+      const { data } = await supabase
+        .from('pointages')
+        .select('type, time')
+        .eq('employee_id', employee.id)
+        .order('time', { ascending: false })
+        .limit(20)
       if (!active) return
       setRecent(data ?? [])
-      setOrgStatus(status ?? null)
     }
     loadRecent()
     return () => {
@@ -111,43 +105,10 @@ export default function EmployeePointer() {
 
   const busy = status === 'locating' || status === 'uploading'
 
-  if (orgStatus && orgStatus.active === false) {
-    return (
-      <div className="flex min-h-svh items-center justify-center bg-bg-subtle px-4">
-        <div className="w-full max-w-sm rounded-lg border border-danger bg-white p-6 text-center">
-          <h1 className="mb-2 text-lg font-semibold text-text">Compte désactivé</h1>
-          <p className="mb-4 text-sm text-text-muted">
-            L'accès de "{orgStatus.name}" a été désactivé. Contactez votre employeur.
-          </p>
-          <button
-            type="button"
-            onClick={signOut}
-            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-text hover:bg-bg-hover"
-          >
-            Déconnexion
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div className="flex min-h-svh flex-col items-center bg-bg-subtle px-4 py-8">
-      <div className="flex w-full max-w-sm flex-1 flex-col">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-medium tracking-wide text-text-faint uppercase">Pointage</p>
-            <h1 className="text-lg font-semibold text-text">
-              {employee.first_name} {employee.last_name}
-            </h1>
-          </div>
-          <button type="button" onClick={signOut} className={BUTTON_SECONDARY_CLASS}>
-            Déconnexion
-          </button>
-        </div>
-
-        <div className="flex flex-1 flex-col justify-center gap-5">
-          {error && (
+    <div className="mx-auto flex w-full max-w-sm flex-col">
+      <div className="flex flex-1 flex-col justify-center gap-5">
+        {error && (
             <p className="rounded-lg border border-danger bg-danger-soft p-3 text-sm text-danger">{error}</p>
           )}
 
@@ -219,7 +180,6 @@ export default function EmployeePointer() {
             </div>
           )}
         </div>
-      </div>
 
       {showCamera && <CameraCapture onCapture={handleCapture} onCancel={handleCancelCamera} />}
     </div>

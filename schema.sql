@@ -897,3 +897,110 @@ begin
 end;
 $$;
 grant execute on function admin_delete_client(uuid, text) to authenticated;
+
+-- ============================================================
+-- V7 : espace employé complet — historique de pointages en lecture seule,
+-- demande de congé, complétion du profil non sensible, fiche personnelle
+-- ============================================================
+
+-- 1. Historique de pointages en lecture seule pour l'employé lui-même.
+-- Aucune policy UPDATE/DELETE sur pointages pour qui que ce soit, y compris
+-- le manager : un pointage reste immuable par conception (V1, commentaire
+-- "registre d'horodatage où chaque pointage doit rester immuable"). Cette
+-- policy SELECT n'ajoute donc structurellement aucune possibilité de
+-- modification, seulement de lecture de ses propres lignes.
+create policy "Employé voit ses propres pointages"
+  on pointages for select
+  using (employee_id in (select id from employees where user_id = auth.uid()));
+
+-- 2. Demande de congé par l'employé.
+alter table leaves add column if not exists comment text;
+
+-- org_id forcé par trigger (même pattern que set_pointage_org, V1) : ne
+-- dépend jamais de ce que le client envoie, l'employé ne peut donc pas
+-- créer une demande rattachée à une autre organisation.
+create or replace function set_leave_org() returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  select org_id into new.org_id from employees where id = new.employee_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_set_leave_org on leaves;
+create trigger trg_set_leave_org
+  before insert on leaves
+  for each row execute function set_leave_org();
+
+-- status = 'pending' est vérifié ici en plus du trigger ci-dessus : un
+-- employé ne peut jamais créer une demande déjà 'approved'/'rejected'.
+-- Seul le manager peut faire évoluer le statut (policy UPDATE existante
+-- "Owner approuve ou rejette les congés", V2, inchangée).
+create policy "Employé demande un congé pour lui-même"
+  on leaves for insert
+  with check (is_own_employee(employee_id) and status = 'pending');
+
+-- 3. Complétion du profil par l'employé, limitée aux champs non sensibles.
+--
+-- RLS filtre des LIGNES, pas des colonnes (déjà expliqué en détail V2 à
+-- propos d'employee_payroll) : impossible d'autoriser un UPDATE sur
+-- certaines colonnes de "employees" et pas d'autres avec une seule policy
+-- USING/WITH CHECK. Un trigger BEFORE UPDATE fige donc explicitement toute
+-- colonne hors adresse/lieu de naissance/situation familiale/date de
+-- naissance à sa valeur précédente dès que l'auteur n'est pas le manager
+-- de l'organisation — y compris org_id et status, donc en particulier le
+-- salaire/la sécu/le RIB restent de toute façon hors de portée (colonnes
+-- sur employee_payroll, aucune policy n'y donne accès à l'employé).
+--
+-- Exception nécessaire : le flux d'activation existant (Invite.jsx, claim
+-- par téléphone) est lui aussi un UPDATE fait par un non-manager, et a
+-- légitimement besoin de faire passer status/user_id de pending/null à
+-- active/<uid>. Reconnu explicitement via v_is_claim pour ne pas casser ce
+-- flux tout en bloquant toute autre tentative de modifier ces deux colonnes.
+create or replace function protect_employee_restricted_fields() returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_is_claim boolean;
+begin
+  if is_org_owner(new.org_id) then
+    return new;
+  end if;
+
+  v_is_claim := old.status = 'pending' and old.user_id is null
+                and new.status = 'active' and new.user_id is not null;
+
+  if not v_is_claim then
+    new.status := old.status;
+    new.user_id := old.user_id;
+  end if;
+
+  new.id := old.id;
+  new.created_at := old.created_at;
+  new.org_id := old.org_id;
+  new.first_name := old.first_name;
+  new.last_name := old.last_name;
+  new.phone := old.phone;
+  new.matricule := old.matricule;
+  new.job_title := old.job_title;
+  new.contract_type := old.contract_type;
+  new.contract_start_date := old.contract_start_date;
+  new.contract_end_date := old.contract_end_date;
+  new.hire_date := old.hire_date;
+  new.termination_date := old.termination_date;
+  new.termination_reason := old.termination_reason;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_protect_employee_restricted_fields on employees;
+create trigger trg_protect_employee_restricted_fields
+  before update on employees
+  for each row execute function protect_employee_restricted_fields();
+
+create policy "Employé complète ses coordonnées non sensibles"
+  on employees for update
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());

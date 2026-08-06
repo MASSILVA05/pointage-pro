@@ -191,6 +191,7 @@ export default function Leaves() {
                 <th className="px-4 py-3 font-medium">Employé</th>
                 <th className="px-4 py-3 font-medium">Type</th>
                 <th className="px-4 py-3 font-medium">Période</th>
+                <th className="px-4 py-3 font-medium">Commentaire</th>
                 <th className="px-4 py-3 font-medium">Statut</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
@@ -204,6 +205,9 @@ export default function Leaves() {
                   <td className="px-4 py-3 text-text-muted">{leaveLabel(lv.type)}</td>
                   <td className="px-4 py-3 text-text-muted">
                     {formatIsoDateOnly(lv.start_date)} → {formatIsoDateOnly(lv.end_date)}
+                  </td>
+                  <td className="max-w-[16rem] truncate px-4 py-3 text-text-muted" title={lv.comment || ''}>
+                    {lv.comment || '—'}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={lv.status} />
